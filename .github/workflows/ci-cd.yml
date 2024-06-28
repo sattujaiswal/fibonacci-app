@@ -37,4 +37,4 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Push Docker image to DockerHub
-      run: docker push yourdockerhubusername/fibonacci-app
+      run: docker push sattu2024/fibonacci-app
