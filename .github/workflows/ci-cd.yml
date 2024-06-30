@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: Deploy to AWS Elastic Beanstalk
 
 on:
   push:
@@ -6,21 +6,25 @@ on:
       - main
 
 jobs:
-  build-and-push:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
 
-      - name: Print Docker Hub Username
-        run: echo ${{ secrets.DOCKERHUB_USERNAME }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Print Docker Hub Token Length
-        run: echo ${{ secrets.DOCKERHUB_TOKEN }} | wc -c
+      - name: Build Docker image
+        run: docker build -t sattu2024/fibonacci-app .
 
       - name: Login to Docker Hub
         uses: docker/login-action@v2
@@ -28,10 +32,47 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and tag Docker image
-        run: |
-          docker build . --file Dockerfile --tag sattu2024/fibonacci-app:latest
-
       - name: Push Docker image to Docker Hub
+        run: docker push sattu2024/fibonacci-app
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Deploy to Elastic Beanstalk
         run: |
-          docker push sattu2024/fibonacci-app:latest
+          EB_BUCKET=elasticbeanstalk-us-east-1-767397850593
+          DOCKER_IMAGE=sattu2024/fibonacci-app:latest
+          ZIP_FILE=app.zip
+
+          # Create Dockerrun.aws.json file
+          echo '{
+            "AWSEBDockerrunVersion": "1",
+            "Image": {
+              "Name": "'"$DOCKER_IMAGE"'",
+              "Update": "true"
+            },
+            "Ports": [
+              {
+                "ContainerPort": "80"
+              }
+            ]
+          }' > Dockerrun.aws.json
+
+          # Zip the Dockerrun.aws.json file
+          zip -r $ZIP_FILE Dockerrun.aws.json
+
+          # Upload the zip file to S3
+          aws s3 cp $ZIP_FILE s3://$EB_BUCKET/$ZIP_FILE
+
+          # Create a new application version in Elastic Beanstalk
+          aws elasticbeanstalk create-application-version --application-name fibonacci-app \
+            --version-label v${{ github.run_number }} \
+            --source-bundle S3Bucket=$EB_BUCKET,S3Key=$ZIP_FILE
+
+          # Update the Elastic Beanstalk environment to use the new application version
+          aws elasticbeanstalk update-environment --environment-name fibonacci-app-env \
+            --version-label v${{ github.run_number }}
